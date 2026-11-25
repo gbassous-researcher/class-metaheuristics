@@ -2,6 +2,7 @@ import numpy as np
 from base import Instance
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+from typing import List, Tuple
 
 class Solution(Instance):
     class InfeasibleDemand(Exception):
@@ -16,34 +17,69 @@ class Solution(Instance):
         self.facilities = np.zeros(self.J,np.bool)
         self.clients = np.zeros((self.I, self.J), np.int32)
         self.cap_over_fcost: np.ndarray = self.capacidades / self.custos_fixos
-        self.cap_over_vcost: np.ndarray = self.capacidades / self.custos_transporte
+        self.vcost: np.ndarray = self.custos_transporte
+        self.sorted_fcost_index: np.ndarray = self.cap_over_fcost.argsort(descending=True)
+        self.next_cheapest_facility_index:int = 0
+        self.sorted_vcost_index: np.ndarray = self.vcost.argsort(axis=1,descending=False)
 
     def check_total_capacity(self) -> bool:
-        return sum(self.facilities * self.capacidades) >= sum(self.demandas)
+        return (self.facilities * self.capacidades).sum() >= self.demandas.sum()
 
     def check_total_demand(self) -> bool:
-        return sum(sum(self.clients)) == sum(self.demandas)
+        return self.clients.sum() == self.demandas.sum()
     
-    def check_conflitos(self) -> list:
+    def check_conflitos(self, facilities_index:List[int]) -> List[Tuple[int,int],]:
         violated = list()
-        for c in self.pares_conflitantes_0based:
-            for j in range(self.J):
-                if self.clients[c[0],j] > 0 and self.clients[c[1],j] > 0:
-                    violated.append(c)
-        return violated
+        for j in facilities_index:
+            return [self.clients[c[0],j] > 0 and self.clients[c[1],j] > 0 for c in self.pares_conflitantes_0based]
 
-    def check_per_facility_capacity(self) -> list:
+    def check_per_facility_capacity(self) -> List[Tuple[int,np.ndarray]]:
         over = list()
         for j in range(self.J):
-            if sum(self.clients[:,j] > self.facilities[j]*self.capacidades[j]):
+            if (self.clients[:,j] > self.facilities[j]*self.capacidades[j]).sum():
                 over.append((j, self.clients[:,j] - self.facilities[j]*self.capacidades[j]))
         return over
 
+    def open_facility(self, facility_index:int):
+        assert self.facilities[facility_index] == 0
+        self.facilities[facility_index] = np.True_
+
+    def get_next_cheapest_facility(self)-> int:
+        return (self.sorted_fcost_index == self.next_cheapest_facility_index).argmax()
+    
+    def open_next_cheapest_facility(self):
+        assert self.facilities.sum() < self.next_cheapest_facility_index + 1
+        to_open = self.get_next_cheapest_facility()
+        self.open_facility(to_open)
+        self.next_cheapest_facility_index += 1
+        return to_open
+
+    def get_x_next_cheapest_vcost(self, i, j_list, x = 1):
+        sub = self.sorted_vcost_index[i,:]
+        return sub[np.isin(sub,j_list[:x])]
+
+    def assign_demand(self, facility_j, client_i, demand) -> int:
+        remaining_cap = self.capacidades[facility_j] - self.clients[:,facility_j].sum()
+        if remaining_cap >= demand:
+            self.clients[client_i,facility_j] += demand
+            return 0
+        else:
+            over = demand - remaining_cap
+            self.clients[client_i,facility_j] += remaining_cap
+            return over
+
+    def unassign_demand(self, facility_j, client_i, demand):
+        self.clients[client_i,facility_j] -= demand
+        
+
     def facility_cost(self):
-        return sum(self.custos_fixos * self.facilities)
+        return (self.custos_fixos * self.facilities).sum()
 
     def shipping_cost(self):
-        return sum(sum(self.clients * self.custos_transporte))
+        return (self.clients * self.custos_transporte).sum()
+
+    def total_cost(self):
+        return self.shipping_cost() + self.facility_cost()
 
     def save(self, path: str):
         """Save the decision variables (facilities, clients) to a .npz file.
